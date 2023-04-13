@@ -1,0 +1,344 @@
+-----CLEANING ALL MONTHS
+
+--Creating Date Column
+
+Alter table Dec
+Add Column Date DATE
+;
+
+--------------- Creating CustomerID
+
+Alter table June
+Add Column CustomerID 
+;
+
+UPDATE June
+Set CustomerID = 
+SUBSTR(PurchaseAddress, 1, 9) || SUBSTR(PurchaseAddress, -5) 
+;
+
+UPDATE June
+Set CustomerID = REPLACE (CustomerID, ' ', 'z')
+;
+
+SELECT 
+    COUNT(DISTINCT PurchaseAddress)   --- to make sure numbers match
+    , COUNT(DISTINCT CustomerID)
+FROM Dec 
+;
+
+--Self join to solve duplicate CustomerIDs 
+
+SELECT 
+    j.CustomerID
+    , j.PurchaseAddress
+    , Jan.CustomerID
+    , Jan.PurchaseAddress
+FROM Jan as j
+JOIN Jan ON Jan.CustomerID = j.CustomerID
+WHERE j.PurchaseAddress <> Jan.PurchaseAddress
+;
+
+
+------------ removing meaningless text
+
+SELECT *
+--DELETE 
+from Dec
+WHERE Product is 'Product'
+;
+
+--------------------- Moving dates to correct table
+
+Update Dec
+Set Date = 
+substr(OrderDate, 1, 8)
+; -- same query for all
+
+SELECT * 
+FROM Nov
+WHERE OrderID not null AND Date >= '12/01/19'
+;
+
+
+INSERT INTO Dec 
+SELECT * 
+FROM Nov
+WHERE DATE >= '12/01/19'
+;
+
+
+DELETE FROM Dec
+WHERE Date = '01/01/20'
+;
+
+SELECT *
+FROM Dec
+WHERE OrderID not null
+Order by Date Desc
+;
+
+CREATE TABLE JanTwenty as 
+SELECT 
+    * 
+FROM Dec
+WHERE Date is '01/01/20'
+;
+
+-------------- REMOVING DUPLICATES
+
+DELETE
+
+--SELECT *
+FROM Dec
+WHERE EXISTS (
+  SELECT 
+      OrderID
+      , Product
+      , PurchaseAddress 
+  FROM Dec as d
+  WHERE Dec.OrderID = d.OrderID
+  AND Dec.Product = d.Product
+  AND Dec.PurchaseAddress = d.PurchaseAddress
+  AND Dec.Quantity = d.Quantity
+  AND Dec.rowid > d.rowid
+);
+
+
+SELECT *
+FROM Dec
+WHERE OrderID is '298883'  -- spot check 
+;
+
+-- Breaking out state from purchase address (all tables)
+
+ALTER TABLE Dec
+Add Column State TEXT
+
+UPDATE Dec
+Set State = SUBSTR(Dec.PurchaseAddress, -8, 2) 
+
+-- Combining all 2019 months to make yearly table
+
+
+CREATE TABLE Year19 as 
+SELECT *, '1' as Month 
+FROM Jan
+WHERE OrderID is not null
+UNION ALL 
+SELECT * , '2' as Month 
+FROM Feb
+WHERE OrderID is not null
+UNION ALL 
+SELECT * , '3' as Month 
+FROM March
+WHERE OrderID  is not null
+UNION ALL
+SELECT * , '4' as Month 
+FROM April
+WHERE OrderID is not null
+UNION ALL 
+SELECT * , '5' as Month 
+FROM May
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '6' as Month 
+FROM June
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '7' as Month 
+FROM July
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '8' as Month 
+FROM Aug
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '9' as Month 
+FROM Sep
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '10' as Month 
+FROM Oct
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '11' as Month 
+FROM Nov
+WHERE OrderID  is not null
+UNION ALL 
+SELECT * , '12' as Month 
+FROM Dec
+WHERE OrderID  is not null
+
+----------- Get an overview of dataset
+ 
+SELECT 
+    State
+    , COUNT(State) as Count
+FROM Year19
+GROUP BY State
+ORDER BY Count desc                     -- only 8 states represented in dataset
+
+SELECT 
+    COUNT(Distinct CustomerID) as CustomerCount
+FROM Year19
+ORDER BY CustomerCount desc             -- 140, 768 customers in 8 states
+
+SELECT 
+    COUNT(Distinct Product) as NumProducts
+FROM Year19
+ORDER BY NumProducts desc              -- 19 distinct products in dataset
+
+-- ANALYSIS
+----------- What were the 5 bestselling products in 2019?
+
+SELECT 
+    Product
+    , SUM(Quantity) as NumberSold
+FROM Year19
+GROUP BY Product
+ORDER BY NumberSold DESC
+LIMIT 5;
+
+----------- Which 5 products brought in the most revenue? 
+
+SELECT 
+    Product
+    , COUNT(Quantity) as NumberSold
+    , CAST(ROUND(SUM(Quantity) * Price) as float) as Revenue
+FROM Year19
+GROUP BY Product
+Order BY Revenue DESC
+LIMIT 5;
+
+----------- What were the bestselling products for each month?
+
+With cte as (
+SELECT 
+    Product
+    , COUNT(Quantity) as NumSold
+    , Month
+FROM Year19
+GROUP BY Product, Month
+ORDER BY NumSold DESC
+)
+SELECT 
+        Product, 
+        Rank() OVER (Partition by Month Order by NumSold DESC) as Rank
+        , Month
+FROM cte
+GROUP BY Product, Month
+ORDER BY Rank, Month
+LIMIT 12;            
+            
+-- (spot check) -- 
+
+SELECT 
+    Product
+    , COUNT(Quantity) as NumSold
+    , Month
+FROM Year19
+GROUP BY Product, Month
+HAVING Month = 'January'
+ORDER BY NumSold DESC
+
+
+
+----------- Find the top 5 customers by money spent
+
+WITH cte2 as (
+SELECT
+    CustomerID
+    , Count(CustomerID) as Transactions
+    , ROUND(SUM(Quantity*Price)) as TotalSpent
+FROM Jan
+GROUP BY CustomerID
+ORDER BY TotalSpent DESC
+)
+SELECT *
+    , RANK() OVER (order by TotalSpent desc) as TopSpenders
+FROM cte2
+LIMIT 5
+
+----------- Which states had the most customers, revenue?
+
+SELECT 
+    State
+    , COUNT(CustomerID) as NumCustomers
+    , (ROUND(SUM(Price)) as Revenue
+FROM Year19 
+GROUP BY State
+ORDER BY Revenue DESC                     -- CA, NY, TX
+
+-----------Which months had the most, least in revenue?
+
+With cte as (
+SELECT 
+      Month
+    , ROUND(SUM(Price*Quantity)) as Revenue
+FROM Year19
+GROUP BY Month
+)
+SELECT 
+    Month
+    , Revenue as RevenueMaxMin
+FROM cte
+WHERE Revenue IN (Select MAX(Revenue) FROM cte) 
+    OR Revenue IN(Select MIN(Revenue) FROM cte)
+ORDER BY Revenue DESC                     --- Dec the most; Jan the least
+
+
+----------- How did revenue change from month to month?
+
+SELECT 
+     Month
+     , ROUND(SUM(Price*Quantity)) as Revenue
+     , ROUND(SUM(Price*Quantity)) - LAG(ROUND(SUM(Price*Quantity))) OVER (Order by Month) as ChangeInRev
+ FROM Year19
+ GROUP BY Month
+ ORDER BY Month
+
+----------- Which product performed the worst? 
+
+With cte as (
+SELECT 
+    Product
+    , ROUND(SUM(Quantity*Price)) as Revenue
+FROM Year19 
+GROUP BY Product
+ORDER BY Revenue Desc
+) 
+SELECT 
+    Product
+    , Revenue
+FROM cte
+WHERE 
+    Revenue IN (SELECT Min(Revenue) from cte)     --- AAA batteries (4pack) brought in the least revenue: 92,633
+
+SELECT 
+    Product
+    , SUM(Quantity)
+    , SUM(Quantity*Price) as Revenue
+FROM Year19
+GROUP BY Product
+ORDER BY SUM(Quantity) 
+LIMIT 1                           -- LG Dryer sold the least by quantity | 
+
+----------- Look for patterns in time of day when transactions are made
+
+With cte as (
+SELECT 
+    substr(OrderDate, -5, 5) as TransactionTime
+FROM Year19
+ORDER BY 1
+)
+SELECT 
+    TransactionTime
+    , COUNT(TransactionTime) as frequency
+FROM cte
+GROUP BY TransactionTime
+Order by frequency desc                             --- most around noon, followed by hour of 7pm
+
+SELECT Month, SUM(Quantity*Price)
+FROM Year19
+WHERE Month = '12'
